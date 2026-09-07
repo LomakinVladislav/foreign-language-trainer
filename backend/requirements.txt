@@ -10,3 +10,4 @@ pydantic-settings==2.2.1
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.9
 PyJWT==2.8.0
+redis==4.6.0

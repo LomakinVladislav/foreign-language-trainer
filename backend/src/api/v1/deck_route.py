@@ -1,3 +1,4 @@
+import json
 from typing import List
 from fastapi import APIRouter, HTTPException, status
 from db.schemas.user_schemas import UserInDBSchema
@@ -7,6 +8,9 @@ from db.orm.deck_orm import add_deck_with_cards, get_decks, get_deck_by_id, get_
 from db.orm.favorites_decks_orm import add_favorite_deck, delete_favorite_deck, get_favorite_decks
 from db.schemas.deck_schemas import DeckWithCardsCreateSchema, DeckWithCardsResponseSchema, DeckWithCardsUpdateSchema
 from api.session_dependency import SessionDep
+from core.redis_client import get_redis
+
+import time
 
 router = APIRouter()
 
@@ -63,23 +67,56 @@ async def get_deck_information_by_id_api(deck_id: int, session: SessionDep, curr
 
 
 @router.get("/decks/favorites", response_model=List[int])
-async def get_favorite_deck_api(session: SessionDep, current_user: UserInDBSchema = Depends(get_current_active_user)):
+async def get_favorite_deck_api(session: SessionDep, 
+                                current_user: UserInDBSchema = Depends(get_current_active_user), 
+                                r = Depends(get_redis)):
     user_id = current_user.id 
+    
+    start_time = time.perf_counter()
+    
+    cache_key = f"user:{user_id}:favorite_decks"
+    
+    cached = await r.get(cache_key)
+    if cached:
+        elapsed = (time.perf_counter() - start_time) * 1000
+        print(f"Время ответа ИЗ КЭША: {elapsed:.2f} мс")
+        return json.loads(cached)
+    
     result = await get_favorite_decks(session=session, user_id=user_id)
+    elapsed = (time.perf_counter() - start_time) * 1000
+    print(f"Время ответа ИЗ БД: {elapsed:.2f} мс")
+
+    await r.set(cache_key, json.dumps(result), ex=60)
+    print(f"Данные сохранены в Redis для ключа: {cache_key}")
+
     return result
 
 
 @router.post("/decks/favorites/{deck_id}")
-async def add_favorite_deck_api(deck_id: int, session: SessionDep, current_user: UserInDBSchema = Depends(get_current_active_user)):
+async def add_favorite_deck_api(deck_id: int, 
+                                session: SessionDep, 
+                                current_user: UserInDBSchema = Depends(get_current_active_user),
+                                r = Depends(get_redis)):
     user_id = current_user.id 
     result = await add_favorite_deck(deck_id=deck_id, session=session, user_id=user_id)
+
+    await r.delete(f"user:{user_id}:favorite_decks")
+
     return result
 
 
 @router.delete("/decks/favorites/{deck_id}")
-async def delete_favorite_deck_api(deck_id: int, session: SessionDep, current_user: UserInDBSchema = Depends(get_current_active_user)):
+async def delete_favorite_deck_api(deck_id: int, 
+                                   session: SessionDep, 
+                                   current_user: UserInDBSchema = Depends(get_current_active_user),
+                                   r = Depends(get_redis)):
     user_id = current_user.id 
     result = await delete_favorite_deck(deck_id=deck_id, session=session, user_id=user_id)
+
+    await r.delete(f"user:{user_id}:favorite_decks")
+    print(f"Очистка кэша для ключа {user_id}")
+
+    
     return result
 
 
